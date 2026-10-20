@@ -46,5 +46,3 @@
 ```bash
 npx serve .
 ```
-
-如需运行内置的 21 项数值精度与完整性单元测试，可在浏览器中打开 `test-runner.html`。
