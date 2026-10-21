@@ -1174,7 +1174,7 @@ table.wrap-table td:first-child {
 
 @media (max-width: 1100px) {
   .comp-overview-grid, .prob-grid, .prob-grid.mcm-grid, .paper-grid,
-  .vs-body, .metric-spec-grid, .combo-card-list, .two-col {
+  .vs-body, .metric-spec-grid, .combo-card-list, .two-col, .radar-cmp-body {
     grid-template-columns: 1fr;
   }
   .coc-meta {
@@ -1185,4 +1185,270 @@ table.wrap-table td:first-child {
     align-items: flex-start;
   }
 }
+
+/* =========================================================
+   同类算法六维能力雷达图对比卡片 (.radar-cmp-card)
+   ========================================================= */
+.radar-cmp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.radar-cmp-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--line);
+}
+.radar-quick-btns {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.radar-cmp-body {
+  display: grid;
+  grid-template-columns: minmax(290px, 1.05fr) minmax(280px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.radar-canvas-col {
+  background: #fafbfe;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+.radar-ctrl-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.radar-check-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.radar-check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.radar-chk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 99px;
+  border: 1.5px solid var(--line);
+  background: #ffffff;
+  font-size: 12.8px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+.radar-chk-pill input[type="checkbox"] {
+  accent-color: var(--rc, var(--primary));
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+.radar-chk-pill .rc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.radar-chk-pill small {
+  color: var(--muted);
+  font-weight: 500;
+}
+.radar-chk-pill.on {
+  border-color: var(--rc, var(--primary));
+  background: color-mix(in srgb, var(--rc, var(--primary)) 7%, #ffffff);
+  color: var(--ink);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+}
+.radar-summary-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 255px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.radar-sum-item {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-left: 3.5px solid var(--rc, var(--primary));
+  border-radius: 10px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rsi-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.rsi-head .rc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.rsi-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.2px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.rsi-pro b {
+  color: #0d9488;
+}
+.rsi-con b {
+  color: #e11d48;
+}
+
+/* =========================================================
+   Publication-Ready 矢量图导出栏 (SVG / PDF) & LaTeX 三线表工具栏
+   ========================================================= */
+.chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chart-export-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ce-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 2px 7px;
+  border-radius: 6px;
+  margin-right: auto;
+}
+.ce-btn, .tt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ce-btn:hover, .tt-btn:hover, .tt-btn.on {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.06);
+}
+.dg-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dg-export-btns {
+  display: inline-flex;
+  gap: 6px;
+}
+
+/* 仅在求解结果区域 (#out) 显示 LaTeX 三线表与 CSV 导出工具栏 */
+.tbl-toolbar {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 7px 12px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+#out .tbl-toolbar {
+  display: flex;
+}
+.tt-badge {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #475569;
+  margin-right: auto;
+}
+.latex-preview {
+  margin: 0;
+  padding: 12px 14px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  border-top: 1px solid #334155;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* CSV 拖拽上传高亮与徽标 */
+.csv-drop-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #0d9488;
+  background: rgba(13, 148, 136, 0.1);
+  border: 1px solid rgba(13, 148, 136, 0.25);
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+.csv-btn {
+  cursor: pointer;
+}
+.data-input.drag-over {
+  border-color: #0d9488 !important;
+  background: rgba(13, 148, 136, 0.06) !important;
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.18) !important;
+}
+
+/* 顶部/底部浮动轻提示 Toast */
+.mm-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.92);
+  color: #ffffff;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.mm-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 

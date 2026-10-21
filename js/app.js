@@ -91,21 +91,320 @@
   }
   const parseList = s => s.split(/[\s,，;；]+/).filter(Boolean).map(Number);
 
-  /* ---------------- 通用 UI 组件 ---------------- */
+  /* ---------------- 通用 UI 组件与学术导出工具 (SVG / PDF / LaTeX / CSV) ---------------- */
   let charts = [];
+  let chartMap = {};
   let curAlgo = ALGOS[0];
-  function destroyCharts() { charts.forEach(c => c.destroy()); charts = []; }
+  function destroyCharts() { charts.forEach(c => c.destroy()); charts = []; chartMap = {}; }
   function mkChart(id, cfg) {
     const el = document.getElementById(id);
     if (!el) return null;
     if (!window.Chart) { el.parentElement.innerHTML = '<div class="hint">图表库加载失败（请检查网络连接后刷新）</div>'; return null; }
+    if (chartMap[id]) {
+      chartMap[id].destroy();
+      charts = charts.filter(x => x !== chartMap[id]);
+    }
     const c = new Chart(el, cfg);
+    c._canvasId = id;
     charts.push(c);
+    chartMap[id] = c;
     return c;
   }
-  const chartBox = (id, h = 320) => `<div class="chart-box" style="height:${h}px"><canvas id="${id}"></canvas></div>`;
+  const chartBox = (id, h = 320) => `<div class="chart-wrap"><div class="chart-export-bar"><span class="ce-tag">Publication-Ready</span><button type="button" class="ce-btn" data-chart-svg="${id}" title="导出无损矢量图 SVG（可导入 Illustrator / Inkscape / Visio）">📐 SVG 矢量图</button><button type="button" class="ce-btn" data-chart-pdf="${id}" title="导出出版级 PDF 图表（可直接用于 LaTeX \\includegraphics）">📄 PDF 导出</button></div><div class="chart-box" style="height:${h}px"><canvas id="${id}"></canvas></div></div>`;
   const PALETTE = ['#6366f1', '#14b8a6', '#f97316', '#ec4899', '#0ea5e9', '#a855f7', '#eab308', '#22c55e', '#ef4444', '#64748b'];
   const alpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+
+  function showToast(msg) {
+    let t = document.getElementById('mm-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'mm-toast';
+      t.className = 'mm-toast';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._tm);
+    t._tm = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 200);
+  }
+
+  function xmlEsc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function parseCssColor(col, defHex = '#6366f1', defOp = 1) {
+    if (!col || typeof col !== 'string') return { color: defHex, opacity: defOp };
+    const m = col.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+    if (m) {
+      const hex = '#' + [m[1], m[2], m[3]].map(x => Math.max(0, Math.min(255, +x)).toString(16).padStart(2, '0')).join('');
+      return { color: hex, opacity: m[4] !== undefined ? +m[4] : 1 };
+    }
+    return { color: col, opacity: defOp };
+  }
+
+  /** 将 Chart.js 实例序列化为出版级独立 SVG 矢量图 */
+  function chartToVectorSVG(chart) {
+    const cv = chart.canvas;
+    const W = cv.clientWidth || cv.width || 640;
+    const H = cv.clientHeight || cv.height || 340;
+    const out = [];
+    out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
+    out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">`);
+    out.push(`<rect width="100%" height="100%" fill="#ffffff" rx="8"/>`);
+    const type = chart.config.type;
+    const scales = chart.scales || {};
+
+    if (type === 'radar' && scales.r) {
+      const r = scales.r;
+      const cx = r.xCenter, cy = r.yCenter, rad = r.drawingArea;
+      const labels = chart.data.labels || [];
+      const N = labels.length;
+      [0.2, 0.4, 0.6, 0.8, 1.0].forEach(f => {
+        const pts = labels.map((_, i) => {
+          const ang = -Math.PI / 2 + (2 * Math.PI * i) / N;
+          return `${(cx + rad * f * Math.cos(ang)).toFixed(1)},${(cy + rad * f * Math.sin(ang)).toFixed(1)}`;
+        }).join(' ');
+        out.push(`<polygon points="${pts}" fill="${f === 1 ? 'none' : 'none'}" stroke="${f === 1 ? '#cbd5e1' : '#e2e8f0'}" stroke-width="${f === 1 ? 1.3 : 1}" ${f < 1 ? 'stroke-dasharray="3,3"' : ''}/>`);
+      });
+      labels.forEach((lb, i) => {
+        const ang = -Math.PI / 2 + (2 * Math.PI * i) / N;
+        const x2 = cx + rad * Math.cos(ang), y2 = cy + rad * Math.sin(ang);
+        out.push(`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`);
+        const lx = cx + (rad + 20) * Math.cos(ang), ly = cy + (rad + 18) * Math.sin(ang);
+        const anchor = Math.abs(Math.cos(ang)) < 0.15 ? 'middle' : Math.cos(ang) > 0 ? 'start' : 'end';
+        out.push(`<text x="${lx.toFixed(1)}" y="${(ly + 4).toFixed(1)}" text-anchor="${anchor}" font-size="12.5" font-weight="700" fill="#1e293b">${xmlEsc(lb)}</text>`);
+      });
+      chart.data.datasets.forEach((ds, di) => {
+        const meta = chart.getDatasetMeta(di);
+        if (meta.hidden) return;
+        const bCol = parseCssColor(typeof ds.borderColor === 'string' ? ds.borderColor : PALETTE[di % PALETTE.length]);
+        const bgCol = parseCssColor(typeof ds.backgroundColor === 'string' ? ds.backgroundColor : alpha(bCol.color, 0.16), bCol.color, 0.16);
+        const pts = (meta.data || []).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+        if (pts) {
+          out.push(`<polygon points="${pts}" fill="${bgCol.color}" fill-opacity="${bgCol.opacity}" stroke="${bCol.color}" stroke-width="${ds.borderWidth || 2.2}"/>`);
+          (meta.data || []).forEach(pt => {
+            out.push(`<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="${ds.pointRadius || 3.5}" fill="#ffffff" stroke="${bCol.color}" stroke-width="2"/>`);
+          });
+        }
+      });
+    } else if (scales.x && scales.y) {
+      const sx = scales.x, sy = scales.y;
+      const area = chart.chartArea || { left: sx.left, right: sx.right, top: sy.top, bottom: sy.bottom };
+      out.push(`<rect x="${area.left.toFixed(1)}" y="${area.top.toFixed(1)}" width="${(area.right - area.left).toFixed(1)}" height="${(area.bottom - area.top).toFixed(1)}" fill="none" stroke="#cbd5e1" stroke-width="1"/>`);
+      (sy.ticks || []).forEach((tk, idx) => {
+        const py = sy.getPixelForTick(idx);
+        if (py >= area.top - 1 && py <= area.bottom + 1) {
+          out.push(`<line x1="${area.left.toFixed(1)}" y1="${py.toFixed(1)}" x2="${area.right.toFixed(1)}" y2="${py.toFixed(1)}" stroke="#f1f5f9" stroke-width="1"/>`);
+          out.push(`<text x="${(area.left - 8).toFixed(1)}" y="${(py + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="#64748b">${xmlEsc(tk.label)}</text>`);
+        }
+      });
+      const xTicks = sx.ticks || [];
+      const maxXLabels = Math.max(1, Math.floor((area.right - area.left) / 52));
+      const stepX = Math.max(1, Math.ceil(xTicks.length / maxXLabels));
+      xTicks.forEach((tk, idx) => {
+        if (idx % stepX !== 0 && idx !== xTicks.length - 1) return;
+        const px = sx.getPixelForTick(idx);
+        if (px >= area.left - 1 && px <= area.right + 1) {
+          out.push(`<line x1="${px.toFixed(1)}" y1="${area.bottom.toFixed(1)}" x2="${px.toFixed(1)}" y2="${(area.bottom + 4).toFixed(1)}" stroke="#94a3b8" stroke-width="1"/>`);
+          out.push(`<text x="${px.toFixed(1)}" y="${(area.bottom + 17).toFixed(1)}" text-anchor="middle" font-size="11" fill="#64748b">${xmlEsc(tk.label)}</text>`);
+        }
+      });
+      if (sx.options && sx.options.title && sx.options.title.display && sx.options.title.text) {
+        out.push(`<text x="${((area.left + area.right) / 2).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">${xmlEsc(sx.options.title.text)}</text>`);
+      }
+      if (sy.options && sy.options.title && sy.options.title.display && sy.options.title.text) {
+        const my = (area.top + area.bottom) / 2;
+        out.push(`<text x="14" y="${my.toFixed(1)}" text-anchor="middle" font-size="12" font-weight="600" fill="#334155" transform="rotate(-90 14 ${my.toFixed(1)})">${xmlEsc(sy.options.title.text)}</text>`);
+      }
+      chart.data.datasets.forEach((ds, di) => {
+        const meta = chart.getDatasetMeta(di);
+        if (meta.hidden) return;
+        const mType = meta.type || type;
+        const rawCol = Array.isArray(ds.borderColor) ? ds.borderColor[0] : (typeof ds.borderColor === 'string' ? ds.borderColor : (typeof ds.backgroundColor === 'string' ? ds.backgroundColor : PALETTE[di % PALETTE.length]));
+        const bCol = parseCssColor(rawCol, PALETTE[di % PALETTE.length], 1);
+        const bgCol = parseCssColor(typeof ds.backgroundColor === 'string' ? ds.backgroundColor : alpha(bCol.color, 0.78), bCol.color, 0.78);
+        const elems = meta.data || [];
+        if (mType === 'bar') {
+          elems.forEach((el, ei) => {
+            const p = el.getProps(['x', 'y', 'base', 'width', 'height'], true);
+            const cFill = Array.isArray(ds.backgroundColor) ? parseCssColor(ds.backgroundColor[ei % ds.backgroundColor.length]) : bgCol;
+            if (chart.options.indexAxis === 'y') {
+              const x0 = Math.min(p.base, p.x), w = Math.abs(p.x - p.base), h = p.height || 16;
+              out.push(`<rect x="${x0.toFixed(1)}" y="${(p.y - h / 2).toFixed(1)}" width="${Math.max(1, w).toFixed(1)}" height="${h.toFixed(1)}" rx="4" fill="${cFill.color}" fill-opacity="${cFill.opacity}"/>`);
+            } else {
+              const y0 = Math.min(p.base, p.y), h = Math.abs(p.base - p.y), w = p.width || 20;
+              out.push(`<rect x="${(p.x - w / 2).toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" rx="4" fill="${cFill.color}" fill-opacity="${cFill.opacity}"/>`);
+            }
+          });
+        } else {
+          const validPts = elems.filter(pt => pt && isFinite(pt.x) && isFinite(pt.y) && !pt.skip);
+          if ((mType === 'line' || ds.showLine) && validPts.length > 1) {
+            const dPath = validPts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+            if (ds.fill && validPts.length > 2) {
+              const closePath = `${dPath} L${validPts[validPts.length - 1].x.toFixed(1)},${area.bottom.toFixed(1)} L${validPts[0].x.toFixed(1)},${area.bottom.toFixed(1)} Z`;
+              out.push(`<path d="${closePath}" fill="${bgCol.color}" fill-opacity="0.12" stroke="none"/>`);
+            }
+            const dash = Array.isArray(ds.borderDash) && ds.borderDash.length ? ` stroke-dasharray="${ds.borderDash.join(',')}"` : '';
+            out.push(`<path d="${dPath}" fill="none" stroke="${bCol.color}" stroke-opacity="${bCol.opacity}" stroke-width="${ds.borderWidth || 2.2}" stroke-linecap="round" stroke-linejoin="round"${dash}/>`);
+          }
+          validPts.forEach((pt, pi) => {
+            const r = Array.isArray(ds.pointRadius) ? ds.pointRadius[pi] : (ds.pointRadius ?? (mType === 'scatter' ? 4.5 : 3));
+            if (r > 0) {
+              out.push(`<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="${r}" fill="${bgCol.color}" fill-opacity="${bgCol.opacity}" stroke="${bCol.color}" stroke-width="1.5"/>`);
+            }
+          });
+        }
+      });
+    } else {
+      const dataUrl = cv.toDataURL('image/png', 1.0);
+      out.push(`<image href="${dataUrl}" width="${W}" height="${H}"/>`);
+    }
+
+    const legItems = (chart.data.datasets || []).filter((ds, i) => ds.label && !ds.label.startsWith('_') && !chart.getDatasetMeta(i).hidden);
+    if (legItems.length > 0 && chart.options?.plugins?.legend?.display !== false) {
+      let lx = 18;
+      const ly = 18;
+      legItems.forEach((ds, i) => {
+        const rawC = typeof ds.borderColor === 'string' ? ds.borderColor : (typeof ds.backgroundColor === 'string' ? ds.backgroundColor : PALETTE[i % PALETTE.length]);
+        const c = parseCssColor(rawC, PALETTE[i % PALETTE.length]).color;
+        out.push(`<rect x="${lx}" y="${ly - 9}" width="10" height="10" rx="2.5" fill="${c}"/>`);
+        out.push(`<text x="${lx + 14}" y="${ly}" font-size="11.5" font-weight="600" fill="#334155">${xmlEsc(ds.label)}</text>`);
+        lx += 24 + String(ds.label).length * 7.8;
+      });
+    }
+    out.push(`</svg>`);
+    return out.join('\n');
+  }
+
+  /** 将 Canvas 或 SVG 打包为标准 PDF 1.4 独立文件并触发下载 */
+  async function exportElementToPDF(sourceCanvasOrSvg, filename) {
+    let canvas = sourceCanvasOrSvg;
+    if (sourceCanvasOrSvg instanceof SVGElement) {
+      const svgStr = new XMLSerializer().serializeToString(sourceCanvasOrSvg);
+      const vb = sourceCanvasOrSvg.viewBox?.baseVal;
+      const w = (vb && vb.width) || sourceCanvasOrSvg.clientWidth || 680;
+      const h = (vb && vb.height) || sourceCanvasOrSvg.clientHeight || 280;
+      canvas = document.createElement('canvas');
+      canvas.width = w * 2;
+      canvas.height = h * 2;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const img = new Image();
+      const svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      await new Promise((resolve, reject) => {
+        img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); URL.revokeObjectURL(url); resolve(); };
+        img.onerror = e => { URL.revokeObjectURL(url); reject(e); };
+        img.src = url;
+      });
+    } else if (sourceCanvasOrSvg instanceof HTMLCanvasElement) {
+      const tmp = document.createElement('canvas');
+      tmp.width = sourceCanvasOrSvg.width;
+      tmp.height = sourceCanvasOrSvg.height;
+      const ctx = tmp.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, tmp.width, tmp.height);
+      ctx.drawImage(sourceCanvasOrSvg, 0, 0);
+      canvas = tmp;
+    }
+    const w = canvas.width, h = canvas.height;
+    const jpegUrl = canvas.toDataURL('image/jpeg', 0.96);
+    const binStr = atob(jpegUrl.split(',')[1]);
+    const imgBytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) imgBytes[i] = binStr.charCodeAt(i);
+
+    const pdfW = 595.28;
+    const margin = 36;
+    const drawW = pdfW - margin * 2;
+    const drawH = (h / w) * drawW;
+    const pdfH = Math.max(260, drawH + margin * 2);
+
+    const enc = new TextEncoder();
+    const chunks = [];
+    const offsets = [];
+    let pos = 0;
+    const pushStr = s => { const b = enc.encode(s); chunks.push(b); pos += b.length; };
+    const pushBytes = b => { chunks.push(b); pos += b.length; };
+    const startObj = id => { offsets[id] = pos; pushStr(`${id} 0 obj\n`); };
+
+    pushStr('%PDF-1.4\n%\xFF\xFF\xFF\xFF\n');
+    startObj(1); pushStr('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+    startObj(2); pushStr('<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+    startObj(3); pushStr(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pdfW.toFixed(2)} ${pdfH.toFixed(2)}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`);
+    startObj(4); pushStr(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBytes.length} >>\nstream\n`);
+    pushBytes(imgBytes);
+    pushStr('\nendstream\nendobj\n');
+    const contentStream = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${margin.toFixed(2)} ${margin.toFixed(2)} cm\n/Im0 Do\nQ\n`;
+    startObj(5); pushStr(`<< /Length ${contentStream.length} >>\nstream\n${contentStream}endstream\nendobj\n`);
+    const xrefPos = pos;
+    pushStr('xref\n0 6\n0000000000 65535 f \n');
+    for (let i = 1; i <= 5; i++) pushStr(String(offsets[i]).padStart(10, '0') + ' 00000 n \n');
+    pushStr(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`);
+    downloadBlob(new Blob(chunks, { type: 'application/pdf' }), filename);
+  }
+
+  /** 将 DOM <table> 转换为出版级 LaTeX booktabs 三线表源码 */
+  function domTableToLatex(tableEl, captionTitle = '模型计算结果表') {
+    const cleanCell = td => {
+      const clone = td.cloneNode(true);
+      clone.querySelectorAll('.sbar, svg, button').forEach(x => x.remove());
+      let txt = clone.textContent.replace(/\s+/g, ' ').trim();
+      txt = txt.replace(/([%&_#$])/g, '\\$1').replace(/≈/g, '$\\approx$').replace(/≤/g, '$\\le$').replace(/≥/g, '$\\ge$').replace(/×/g, '$\\times$').replace(/★/g, '$\\star$');
+      return txt || '--';
+    };
+    const allRows = Array.from(tableEl.querySelectorAll('tr'));
+    if (!allRows.length) return '';
+    const keepCols = [];
+    const firstCells = Array.from(allRows[0].children);
+    firstCells.forEach((th, j) => {
+      if (!th.classList.contains('bar-col') && th.textContent.trim() !== '可视化') keepCols.push(j);
+    });
+    const matrix = allRows.map(tr => {
+      const cells = Array.from(tr.children);
+      return keepCols.map(j => (cells[j] ? cleanCell(cells[j]) : '--'));
+    });
+    const colCount = keepCols.length;
+    const align = 'l' + 'c'.repeat(Math.max(0, colCount - 1));
+    const headRow = matrix[0].map(h => `\\textbf{${h}}`).join(' & ') + ' \\\\';
+    const bodyRows = matrix.slice(1).map(r => '    ' + r.join(' & ') + ' \\\\').join('\n');
+    return [
+      '% 需在导言区引入 \\usepackage{booktabs}',
+      '\\begin{table}[htbp]',
+      '  \\centering',
+      `  \\caption{${captionTitle.replace(/([%&_#$])/g, '\\$1')}}`,
+      `  \\begin{tabular}{${align}}`,
+      '    \\toprule',
+      `    ${headRow}`,
+      '    \\midrule',
+      bodyRows,
+      '    \\bottomrule',
+      '  \\end{tabular}',
+      '\\end{table}',
+    ].join('\n');
+  }
+
+  function domTableToCSV(tableEl) {
+    const allRows = Array.from(tableEl.querySelectorAll('tr'));
+    return allRows.map(tr => {
+      const cells = Array.from(tr.children).filter(td => !td.classList.contains('bar-col') && td.textContent.trim() !== '可视化');
+      return cells.map(td => {
+        const s = td.textContent.replace(/\s+/g, ' ').trim();
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(',');
+    }).join('\r\n');
+  }
+
   function gradFill(horizontal) {
     const [c1, c2] = curAlgo.c;
     return ctx => {
@@ -134,25 +433,27 @@
   });
 
   const resCard = (title, body, tag = '') => `<div class="res-card fade-in"><div class="res-title">${title}${tag ? `<span class="res-tag">${tag}</span>` : ''}</div>${body}</div>`;
+  const tblToolbarHTML = () => `<div class="tbl-toolbar"><span class="tt-badge">📑 论文表格工具</span><button type="button" class="tt-btn" data-tbl-act="copy-latex">📋 复制 LaTeX 三线表</button><button type="button" class="tt-btn" data-tbl-act="toggle-latex">👁️ LaTeX 源码</button><button type="button" class="tt-btn" data-tbl-act="export-csv">📥 导出 CSV</button></div>`;
   function tableHTML(M, rows, cols, d = 4, corner = '') {
-    return `<div class="table-wrap"><table><thead><tr><th>${corner}</th>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${M.map((r, i) => `<tr><th>${rows[i]}</th>${r.map(v => `<td>${typeof v === 'number' ? fmt(v, d) : v}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    return `<div class="table-wrap">${tblToolbarHTML()}<table><thead><tr><th>${corner}</th>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${M.map((r, i) => `<tr><th>${rows[i]}</th>${r.map(v => `<td>${typeof v === 'number' ? fmt(v, d) : v}</td>`).join('')}</tr>`).join('')}</tbody></table><pre class="latex-preview" hidden></pre></div>`;
   }
   function rawTable(head, rows) {
-    return `<div class="table-wrap"><table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, j) => (j === 0 ? `<th>${c}</th>` : `<td>${c}</td>`)).join('')}</tr>`).join('')}</tbody></table></div>`;
+    return `<div class="table-wrap">${tblToolbarHTML()}<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, j) => (j === 0 ? `<th>${c}</th>` : `<td>${c}</td>`)).join('')}</tr>`).join('')}</tbody></table><pre class="latex-preview" hidden></pre></div>`;
   }
   const metrics = list => `<div class="metrics">${list.map(m => `<div class="metric ${m.cls || ''}"><div class="mk">${m.k}</div><div class="mv">${m.v}</div>${m.s ? `<div class="ms">${m.s}</div>` : ''}</div>`).join('')}</div>`;
   const rankPill = r => `<span class="rk ${r <= 3 ? 'r' + r : ''}">${r}</span>`;
   const sortedIdx = rank => rank.map((_, i) => i).sort((a, b) => rank[a] - rank[b]);
   function rankTable(names, cols, score, rank, scoreName = '得分', objName = '对象') {
     const order = sortedIdx(rank), max = Math.max(...score.map(Math.abs));
-    return `<div class="table-wrap"><table><thead><tr><th>排名</th><th>${objName}</th>${cols.map(c => `<th>${c.n}</th>`).join('')}<th>${scoreName}</th><th class="bar-col">可视化</th></tr></thead><tbody>${order.map(i => `<tr><td>${rankPill(rank[i])}</td><th>${esc(names[i])}</th>${cols.map(c => `<td>${fmt(c.v[i], c.d ?? 4)}</td>`).join('')}<td class="strong">${fmt(score[i], 4)}</td><td class="bar-col"><div class="sbar"><i style="width:${max > 0 ? Math.max(0, score[i] / max * 100) : 0}%"></i></div></td></tr>`).join('')}</tbody></table></div>`;
+    return `<div class="table-wrap">${tblToolbarHTML()}<table><thead><tr><th>排名</th><th>${objName}</th>${cols.map(c => `<th>${c.n}</th>`).join('')}<th>${scoreName}</th><th class="bar-col">可视化</th></tr></thead><tbody>${order.map(i => `<tr><td>${rankPill(rank[i])}</td><th>${esc(names[i])}</th>${cols.map(c => `<td>${fmt(c.v[i], c.d ?? 4)}</td>`).join('')}<td class="strong">${fmt(score[i], 4)}</td><td class="bar-col"><div class="sbar"><i style="width:${max > 0 ? Math.max(0, score[i] / max * 100) : 0}%"></i></div></td></tr>`).join('')}</tbody></table><pre class="latex-preview" hidden></pre></div>`;
   }
   const errBox = msg => `<div class="callout error fade-in"><b>计算出错</b><div>${msg}</div></div>`;
 
+  const csvImportBtnHTML = () => `<label class="btn ghost sm csv-btn" title="点击选择本地 .csv / .tsv / .txt 数据文件，或直接将文件拖拽到输入框"><input type="file" accept=".csv,.tsv,.txt" hidden class="csv-file-inp">📂 导入 CSV</label>`;
   function inputPanel(num, title, hint, extra = '') {
-    return `<div class="panel"><div class="panel-title"><span class="pt-num">${num}</span>${title}</div><p class="hint">${hint}</p>
-      <textarea id="din" class="data-input" spellcheck="false" placeholder="在此粘贴或输入数据…"></textarea>
-      <div class="btn-row"><button class="btn ghost sm" id="bex">${ico('db')}载入示例</button><button class="btn ghost sm" id="bclr">清空</button><span class="data-info" id="dinfo"></span></div>${extra}</div>`;
+    return `<div class="panel"><div class="panel-title"><span class="pt-num">${num}</span>${title}<span class="csv-drop-badge">支持拖拽 CSV</span></div><p class="hint">${hint}</p>
+      <textarea id="din" class="data-input" spellcheck="false" placeholder="在此粘贴/输入数据，或直接将 .csv / .txt 文件拖拽至此处…"></textarea>
+      <div class="btn-row"><button class="btn ghost sm" id="bex">${ico('db')}载入示例</button>${csvImportBtnHTML()}<button class="btn ghost sm" id="bclr">清空</button><span class="data-info" id="dinfo"></span></div>${extra}</div>`;
   }
   const runBar = (label = '开始计算') => `<div class="run-bar"><button class="btn primary lg" id="brun">${ico('play')}${label}</button></div><div id="out" class="out"></div>`;
   function seg(el, onChange) {
@@ -1044,24 +1345,174 @@
   function diagramBoxHTML(algoId) {
     const dg = window.ALGO_DIAGRAMS && window.ALGO_DIAGRAMS[algoId];
     if (!dg) return '';
-    return `<div class="diagram-card">
-      <div class="dg-title">${dg.title}</div>
+    return `<div class="diagram-card" data-dg-id="${algoId}">
+      <div class="dg-title"><span>${dg.title}</span><span class="dg-export-btns"><button type="button" class="ce-btn" data-dg-svg="${algoId}" title="导出原理图 SVG 矢量文件">📐 SVG</button><button type="button" class="ce-btn" data-dg-pdf="${algoId}" title="导出原理图 PDF 矢量文件">📄 PDF</button></span></div>
       <div class="dg-canvas">${dg.svg}</div>
       <div class="dg-caption">${dg.caption}</div>
     </div>`;
   }
 
+  /* 6 大核心维度（4 字精简标签，杜绝雷达图文字拥挤）与 18 大算法性能画像 */
+  const ALGO_RADAR_DIMS = ['小样本适应', '非线性能力', '客观抗噪性', '计算轻量度', '结论可解释', '全局与外推'];
+  const ALGO_RADAR_PROFILES = {
+    // 评价与决策类 (eval)
+    topsis:  { scores: [82, 68, 86, 94, 92, 85], pro: '正负理想解双基准几何测距，排序分辨率高', con: '需外部赋权（常配熵权法），受极端离群点影响' },
+    ahp:     { scores: [96, 58, 52, 92, 95, 76], pro: '无需客观样本数据，定性经验定量化且含一致性检验', con: '主观性强，指标超 9 个时判断矩阵易不一致' },
+    entropy: { scores: [65, 62, 96, 95, 86, 78], pro: '100% 数据驱动客观赋权，自动识别高区分度指标', con: '依赖样本离散度，忽略指标业务重要性层级' },
+    fce:     { scores: [88, 80, 68, 85, 88, 74], pro: '隶属函数刻画软边界，擅长定性分级综合评判', con: '隶属度函数与权重设定具有一定主观性' },
+    gra:     { scores: [98, 82, 84, 94, 89, 80], pro: '4 个以上小样本即可建模，幾何波形趋势比对灵敏', con: '分辨系数 ρ 常凭经验取 0.5，主要给出相对关联序' },
+    // 预测与回归类 (pred)
+    linear:    { scores: [86, 25, 76, 98, 98, 84], pro: '解析闭式解、t/F 统计检验与置信区间体系最完备', con: '仅限线性关系，对高杠杆异常点较敏感' },
+    multiple:  { scores: [74, 42, 78, 92, 94, 82], pro: '可量化多因素独立边际贡献，支持 VIF 共线性诊断', con: '样本量需大于变量数，强共线性下估计方差膨胀' },
+    nonlinear: { scores: [76, 96, 74, 80, 88, 90], pro: '内置 Logistic 等机理饱和曲线，中长期外推合理', con: '需先验设定函数形式，对数变换易放大零值附近误差' },
+    gm11:      { scores: [98, 75, 78, 94, 86, 68], pro: '仅需 4~10 期贫信息小样本，累加生成自动平滑随机噪声', con: '仅适合指数单调序列，长期外推易发散且怕剧烈波动' },
+    arima:     { scores: [52, 66, 88, 78, 85, 92], pro: '充分挖掘自相关动态记忆，提供严格预测置信扇形带', con: '要求序列平稳或差分平稳，样本量一般需 ≥ 20 期' },
+    // 优化与规划类 (opt)
+    lp:     { scores: [90, 22, 85, 95, 96, 98], pro: '单纯形法保证全局极值，自带松弛变量与瓶颈资源诊断', con: '目标与约束必须全线性，决策变量允许连续可分' },
+    ilp:    { scores: [86, 55, 86, 74, 94, 96], pro: '支持 0-1 选址指派与整数不可分约束，避免四舍五入越界', con: '属 NP-Hard 问题，超大规模变量下分支定界搜索耗时' },
+    sa_pso: { scores: [88, 98, 84, 72, 75, 92], pro: '不依赖梯度与凸性，Metropolis 准则有效跳出局部极小', con: '随机启发式不保证每次必达理论最优，需调参降温率' },
+    // 分类与降维类 (cls)
+    pca:    { scores: [75, 38, 86, 92, 80, 84], pro: '正交变换彻底消除多重共线性，按方差贡献率客观降维', con: '仅捕捉线性相关性，综合主成分物理含义需载荷矩阵辅助解释' },
+    kmeans: { scores: [78, 60, 72, 94, 90, 80], pro: '迭代复杂度 O(nKT) 极快，簇中心与轮廓系数直观清晰', con: '需预先指定簇数 K，对非凸形状簇与离群噪点敏感' },
+    // 机理与随机模拟类 (sim)
+    ode_sir:     { scores: [92, 94, 82, 86, 96, 95], pro: '微分方程深刻揭示系统演化物理机理、再生数阈值与相轨线', con: '依赖机理假设与参数率定，复杂高维系统无解析解' },
+    monte_carlo: { scores: [90, 98, 90, 68, 84, 88], pro: '收敛率 O(N⁻¹/²) 与空间维数无关，擅长高维积分与风险模拟', con: '结果带随机抽样方差，高精度需十万级抽样计算' },
+    markov:      { scores: [84, 65, 86, 94, 92, 90], pro: '转移矩阵清晰刻画状态跃迁，可精确求解长期极限稳态分布', con: '要求无后效性（齐次马氏性）假设，转移概率需保持平稳' },
+  };
+  const RADAR_PALETTE = ['#4f46e5', '#0d9488', '#e11d48', '#d97706', '#7c3aed', '#0284c7'];
+
   function renderOverview(p, a) {
+    const peerAlgos = ALGOS.filter(x => x.cat === a.cat);
+    const defaultChecked = new Set([a.id]);
+    if (peerAlgos.length > 1) {
+      const second = peerAlgos.find(x => x.id !== a.id);
+      if (second) defaultChecked.add(second.id);
+    }
     p.innerHTML = `
     <div class="ov-grid">
       <div class="card span-2"><h3 class="card-h"><span class="ib">${ico('bulb')}</span>核心思想与几何直观</h3><div class="prose">${a.idea}</div>${diagramBoxHTML(a.id)}</div>
       <div class="card"><h3 class="card-h"><span class="ib">${ico('target')}</span>适用场景</h3><ul class="list check">${a.scenes.map(s => `<li>${s}</li>`).join('')}</ul></div>
       <div class="card"><h3 class="card-h"><span class="ib">${ico('db')}</span>数据要求</h3><div class="prose">${a.data}</div></div>
-      <div class="card"><h3 class="card-h"><span class="ib">${ico('up')}</span>优点</h3><ul class="list plus">${a.pros.map(s => `<li>${s}</li>`).join('')}</ul></div>
-      <div class="card"><h3 class="card-h"><span class="ib">${ico('alert')}</span>局限性</h3><ul class="list minus">${a.cons.map(s => `<li>${s}</li>`).join('')}</ul></div>
+      <div class="card span-2 radar-cmp-card">
+        <div class="radar-cmp-head">
+          <div>
+            <h3 class="card-h" style="margin-bottom:4px"><span class="ib">${ico('compass')}</span>同类算法六维能力雷达图对比（${CATS[a.cat].name}）</h3>
+            <p class="hint" style="margin:0">勾选下方同类算法即可叠加至同一雷达图，直观对比各模型优劣边界（标签精简无遮挡，支持导出 SVG / PDF 矢量图）。</p>
+          </div>
+          <div class="radar-quick-btns">
+            <button type="button" class="btn ghost sm" id="rd_all">全选同类</button>
+            <button type="button" class="btn ghost sm" id="rd_only">仅看当前</button>
+          </div>
+        </div>
+        <div class="radar-cmp-body">
+          <div class="radar-canvas-col">
+            ${chartBox('ch_ov_radar', 320)}
+          </div>
+          <div class="radar-ctrl-col">
+            <div class="radar-check-title">勾选要对比的「${CATS[a.cat].name}」算法：</div>
+            <div class="radar-check-list" id="rd_checks">
+              ${peerAlgos.map((pa, idx) => {
+                const col = RADAR_PALETTE[idx % RADAR_PALETTE.length];
+                const isCur = pa.id === a.id;
+                const checked = defaultChecked.has(pa.id) ? 'checked' : '';
+                return `<label class="radar-chk-pill ${checked ? 'on' : ''}" style="--rc:${col}">
+                  <input type="checkbox" value="${pa.id}" data-idx="${idx}" ${checked}>
+                  <span class="rc-dot" style="background:${col}"></span>
+                  <span class="rc-name">${esc(pa.short || pa.name)}${isCur ? ' <small>(当前)</small>' : ''}</span>
+                </label>`;
+              }).join('')}
+            </div>
+            <div class="radar-summary-box" id="rd_summary"></div>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="callout tip"><b>💡 建模提示</b><div>${a.tips}</div></div>
     <div class="cta-row"><a class="btn primary" href="#/${a.id}/steps">查看建模步骤 ${ico('arrow')}</a><a class="btn ghost" href="#/${a.id}/calc">${ico('calc')}直接在线求解</a></div>`;
+
+    const updateRadarComparison = () => {
+      const boxes = $$('#rd_checks input[type="checkbox"]', p);
+      let activeIds = boxes.filter(b => b.checked).map(b => b.value);
+      if (!activeIds.length) {
+        const curBox = boxes.find(b => b.value === a.id) || boxes[0];
+        if (curBox) { curBox.checked = true; activeIds = [curBox.value]; }
+      }
+      boxes.forEach(b => b.closest('.radar-chk-pill').classList.toggle('on', b.checked));
+
+      const datasets = activeIds.map(id => {
+        const idx = peerAlgos.findIndex(x => x.id === id);
+        const pa = peerAlgos[idx] || a;
+        const col = RADAR_PALETTE[Math.max(0, idx) % RADAR_PALETTE.length];
+        const prof = ALGO_RADAR_PROFILES[id] || { scores: [80, 80, 80, 80, 80, 80] };
+        return {
+          label: pa.short || pa.name,
+          data: prof.scores,
+          borderColor: col,
+          backgroundColor: alpha(col, activeIds.length > 2 ? 0.10 : 0.16),
+          borderWidth: id === a.id ? 2.6 : 2,
+          pointBackgroundColor: '#fff',
+          pointBorderColor: col,
+          pointBorderWidth: 2,
+          pointRadius: id === a.id ? 4 : 3,
+        };
+      });
+
+      mkChart('ch_ov_radar', {
+        type: 'radar',
+        data: { labels: ALGO_RADAR_DIMS, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          layout: { padding: { top: 8, bottom: 8, left: 14, right: 14 } },
+          plugins: {
+            legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, padding: 14, font: { size: 12 } } },
+          },
+          scales: {
+            r: {
+              min: 0,
+              max: 100,
+              beginAtZero: true,
+              ticks: { display: false, stepSize: 20 },
+              grid: { color: '#e2e8f0' },
+              angleLines: { color: '#e2e8f0' },
+              pointLabels: {
+                font: { size: 12.5, weight: '700' },
+                color: '#1e293b',
+                padding: 12,
+              },
+            },
+          },
+        },
+      });
+
+      const sumEl = $('#rd_summary', p);
+      if (sumEl) {
+        sumEl.innerHTML = activeIds.map(id => {
+          const idx = peerAlgos.findIndex(x => x.id === id);
+          const pa = peerAlgos[idx] || a;
+          const col = RADAR_PALETTE[Math.max(0, idx) % RADAR_PALETTE.length];
+          const prof = ALGO_RADAR_PROFILES[id] || { pro: (pa.pros && pa.pros[0]) || '', con: (pa.cons && pa.cons[0]) || '' };
+          return `<div class="radar-sum-item" style="--rc:${col}">
+            <div class="rsi-head"><span class="rc-dot" style="background:${col}"></span><b>${esc(pa.short || pa.name)}</b></div>
+            <div class="rsi-tags">
+              <span class="rsi-pro"><b>优势：</b>${esc(prof.pro)}</span>
+              <span class="rsi-con"><b>局限：</b>${esc(prof.con)}</span>
+            </div>
+          </div>`;
+        }).join('');
+      }
+    };
+
+    $('#rd_checks', p).addEventListener('change', updateRadarComparison);
+    $('#rd_all', p).onclick = () => {
+      $$('#rd_checks input[type="checkbox"]', p).forEach(b => (b.checked = true));
+      updateRadarComparison();
+    };
+    $('#rd_only', p).onclick = () => {
+      $$('#rd_checks input[type="checkbox"]', p).forEach(b => (b.checked = b.value === a.id));
+      updateRadarComparison();
+    };
+    updateRadarComparison();
     renderMath(p);
   }
 
@@ -1672,10 +2123,10 @@ J 6.19 7.27 17 7.51`,
   /* ---------- GM(1,1) ---------- */
   CALC.gm11 = root => {
     root.innerHTML = `<div class="calc-grid">
-      <div class="panel"><div class="panel-title"><span class="pt-num">1</span>输入原始时间序列</div>
-        <p class="hint">按时间顺序输入非负数据（至少 4 个），用逗号、空格或换行分隔。</p>
-        <textarea id="din" class="data-input" style="min-height:140px" spellcheck="false"></textarea>
-        <div class="btn-row"><button class="btn ghost sm" id="bex">${ico('db')}载入示例</button><button class="btn ghost sm" id="bclr">清空</button><span class="data-info" id="dinfo"></span></div>
+      <div class="panel"><div class="panel-title"><span class="pt-num">1</span>输入原始时间序列<span class="csv-drop-badge">支持拖拽 CSV</span></div>
+        <p class="hint">按时间顺序输入非负数据（至少 4 个），用逗号、空格或换行分隔，或直接拖入 CSV 文件。</p>
+        <textarea id="din" class="data-input" style="min-height:140px" spellcheck="false" placeholder="在此输入数据，或将 .csv / .txt 文件拖拽至此处…"></textarea>
+        <div class="btn-row"><button class="btn ghost sm" id="bex">${ico('db')}载入示例</button>${csvImportBtnHTML()}<button class="btn ghost sm" id="bclr">清空</button><span class="data-info" id="dinfo"></span></div>
       </div>
       <div class="panel"><div class="panel-title"><span class="pt-num">2</span>参数设置</div>
         <div class="field"><label>起始期标签（如年份，可选）</label><input class="inp" id="start" type="number" value="2017"></div>
@@ -1839,10 +2290,10 @@ J 6.19 7.27 17 7.51`,
   /* ---------- 时间序列 ARIMA ---------- */
   CALC.arima = root => {
     root.innerHTML = `<div class="calc-grid">
-      <div class="panel"><div class="panel-title"><span class="pt-num">1</span>输入时间序列数据</div>
-        <p class="hint">按时间先后顺序输入一维序列（支持单列数字，或首列为时间标签/年份季度）。</p>
-        <textarea id="din_arima" class="data-input" style="min-height:160px" spellcheck="false"></textarea>
-        <div class="btn-row"><button class="btn ghost sm" id="bex_arima">${ico('db')}载入示例</button><button class="btn ghost sm" id="bclr_arima">清空</button><span class="data-info" id="dinfo_arima"></span></div>
+      <div class="panel"><div class="panel-title"><span class="pt-num">1</span>输入时间序列数据<span class="csv-drop-badge">支持拖拽 CSV</span></div>
+        <p class="hint">按时间先后顺序输入一维序列（支持单列数字，或首列为时间标签/年份季度），支持拖拽 CSV。</p>
+        <textarea id="din_arima" class="data-input" style="min-height:160px" spellcheck="false" placeholder="在此输入序列，或将 .csv / .txt 文件拖拽至此处…"></textarea>
+        <div class="btn-row"><button class="btn ghost sm" id="bex_arima">${ico('db')}载入示例</button>${csvImportBtnHTML()}<button class="btn ghost sm" id="bclr_arima">清空</button><span class="data-info" id="dinfo_arima"></span></div>
       </div>
       <div class="panel"><div class="panel-title"><span class="pt-num">2</span>模型阶数与预测设置</div>
         <div class="res-grid" style="gap:10px">
@@ -2302,13 +2753,14 @@ J 6.19 7.27 17 7.51`,
   /* -------------------- 13. 线性规划与单纯形法 -------------------- */
   CALC.lp = box => {
     box.innerHTML =
-      `<div class="panel"><div class="panel-title"><span class="pt-num">1</span>线性规划模型配置（支持二维几何图解与多维单纯形法）</div>
+      `<div class="panel"><div class="panel-title"><span class="pt-num">1</span>线性规划模型配置（支持二维几何图解与多维单纯形法）<span class="csv-drop-badge">支持拖拽 CSV</span></div>
         <p class="hint">预设案例含<b>二维双产品排产（带可行域几何多边形图解）</b>与<b>2024 国赛 C 题农作物多地块种植分配（三维单纯形）</b>。</p>
         <div class="ctrl-row" style="margin-bottom:10px">
           <label>优化方向：</label>
           <div class="seg" id="lp_sense"><button class="on" data-v="max">最大化 (Max Z)</button><button data-v="min">最小化 (Min Z)</button></div>
           <button class="btn ghost sm" id="lp_ex2d">${ico('db')}二维排产示例（含可行域图）</button>
           <button class="btn ghost sm" id="lp_ex3d">${ico('db')}2024国赛C题三作物种植示例</button>
+          ${csvImportBtnHTML()}
         </div>
         <div class="ctrl-row" style="margin-bottom:10px">
           <label>目标函数系数 $\\mathbf c$（逗号分隔）：</label>
@@ -2442,7 +2894,7 @@ J 6.19 7.27 17 7.51`,
   /* -------------------- 13b. 整数规划与 0-1 规划（线性规划子分类） -------------------- */
   CALC.ilp = box => {
     box.innerHTML =
-      `<div class="panel"><div class="panel-title"><span class="pt-num">1</span>整数规划 / 0-1 规划模型配置（分支定界法 Branch &amp; Bound）</div>
+      `<div class="panel"><div class="panel-title"><span class="pt-num">1</span>整数规划 / 0-1 规划模型配置（分支定界法 Branch &amp; Bound）<span class="csv-drop-badge">支持拖拽 CSV</span></div>
         <p class="hint">属于<b>线性规划的核心子分类</b>：支持<b>纯整数规划 (IP)</b>、<b>0-1 二元规划 (BIP)</b> 与<b>混合整数规划 (MILP)</b>，自动对比 LP 松弛解、直接四舍五入陷阱与分支定界搜索树。</p>
         <div class="ctrl-row" style="margin-bottom:10px">
           <label>优化方向：</label>
@@ -2458,6 +2910,7 @@ J 6.19 7.27 17 7.51`,
           <button class="btn ghost sm" id="ilp_ex_ip">${ico('db')}示例1：二维纯整数排产（含整点网格图）</button>
           <button class="btn ghost sm" id="ilp_ex_bin">${ico('db')}示例2：0-1 应急选址/投资组合（5变量）</button>
           <button class="btn ghost sm" id="ilp_ex_milp">${ico('db')}示例3：混合整数规划 MILP（设备+产量）</button>
+          ${csvImportBtnHTML()}
         </div>
         <div class="ctrl-row" style="margin-bottom:10px">
           <label>目标函数系数 $\\mathbf c$（逗号分隔）：</label>
@@ -3294,6 +3747,206 @@ J 6.19 7.27 17 7.51`,
     $$('.nav-link').forEach(l => l.classList.toggle('active', l.dataset.id === lastId));
     document.body.classList.remove('nav-open');
   }
+
+  /* =========================================================
+     全局交互委托：CSV 拖拽/导入、SVG/PDF 矢量图导出、LaTeX 三线表
+     ========================================================= */
+  function normalizeCsvText(rawText, targetTa) {
+    let text = String(rawText || '').replace(/^\uFEFF/, '').trim();
+    if (!text) return '';
+    // 若为线性规划 / 整数规划约束框且不包含 '|'，支持将 CSV 行自动转为约束行或直接保留原格式
+    if (targetTa && (targetTa.id === 'lp_cons' || targetTa.id === 'ilp_cons') && !text.includes('|')) {
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const converted = [];
+      lines.forEach(line => {
+        const cols = line.split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+        if (cols.length >= 4 && (cols[cols.length - 2] === '<=' || cols[cols.length - 2] === '>=' || cols[cols.length - 2] === '=')) {
+          const name = cols[0];
+          const op = cols[cols.length - 2];
+          const rhs = cols[cols.length - 1];
+          const coefs = cols.slice(1, cols.length - 2).join(', ');
+          converted.push(`${name} | ${coefs} | ${op} | ${rhs}`);
+        } else {
+          converted.push(line);
+        }
+      });
+      return converted.join('\n');
+    }
+    // 普通矩阵/序列：将 CSV 双引号与内部空格清理，使得 parseTable 可无缝识别
+    return text.split(/\r?\n/).map(line => {
+      if (!line.trim()) return '';
+      const cells = [];
+      let cur = '', inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { inQ = !inQ; }
+        else if ((ch === ',' || ch === '\t' || ch === ';') && !inQ) {
+          cells.push(cur.trim().replace(/\s+/g, '_'));
+          cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      cells.push(cur.trim().replace(/\s+/g, '_'));
+      return cells.filter(Boolean).join('\t');
+    }).filter(Boolean).join('\n');
+  }
+
+  function applyCsvTextToInput(rawText, ta, fileName = 'CSV') {
+    if (!ta) ta = $('#din') || $('.data-input');
+    if (!ta) return false;
+    const formatted = normalizeCsvText(rawText, ta);
+    if (!formatted) {
+      showToast('⚠️ CSV 文件内容为空');
+      return false;
+    }
+    ta.value = formatted;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    const runBtn = $('#brun');
+    setTimeout(() => {
+      if (runBtn) runBtn.click();
+      showToast(`✅ 已导入 ${fileName} 并完成计算`);
+    }, 60);
+    return true;
+  }
+
+  async function readCsvFileAndApply(file, ta) {
+    if (!file) return;
+    const buf = await file.arrayBuffer();
+    let text = new TextDecoder('utf-8').decode(buf);
+    if (text.includes('\uFFFD')) {
+      try { text = new TextDecoder('gbk').decode(buf); } catch (_) {}
+    }
+    applyCsvTextToInput(text, ta, file.name);
+  }
+
+  document.addEventListener('dragover', e => {
+    const ta = e.target.closest('.data-input') || (e.target.closest('.panel') && $('.data-input', e.target.closest('.panel')));
+    if (!ta) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    ta.classList.add('drag-over');
+  });
+
+  document.addEventListener('dragleave', e => {
+    const ta = e.target.closest('.data-input');
+    if (ta) ta.classList.remove('drag-over');
+  });
+
+  document.addEventListener('drop', e => {
+    const panel = e.target.closest('.panel');
+    const ta = e.target.closest('.data-input') || (panel && $('.data-input', panel));
+    if (!ta) return;
+    ta.classList.remove('drag-over');
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length > 0) {
+      e.preventDefault();
+      readCsvFileAndApply(files[0], ta);
+    }
+  });
+
+  document.addEventListener('change', e => {
+    if (e.target.classList && e.target.classList.contains('csv-file-inp')) {
+      const file = e.target.files && e.target.files[0];
+      const panel = e.target.closest('.panel');
+      const ta = (panel && $('.data-input', panel)) || $('#din') || $('.data-input');
+      if (file) readCsvFileAndApply(file, ta);
+      e.target.value = '';
+    }
+  });
+
+  document.addEventListener('click', async e => {
+    const svgBtn = e.target.closest('[data-chart-svg]');
+    if (svgBtn) {
+      const id = svgBtn.dataset.chartSvg;
+      const chart = chartMap[id];
+      if (!chart) { showToast('⚠️ 未找到图表实例'); return; }
+      const svgStr = chartToVectorSVG(chart);
+      downloadBlob(new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' }), `${curAlgo.id}_${id}.svg`);
+      showToast('📐 已导出出版级 SVG 矢量图');
+      return;
+    }
+
+    const pdfBtn = e.target.closest('[data-chart-pdf]');
+    if (pdfBtn) {
+      const id = pdfBtn.dataset.chartPdf;
+      const chart = chartMap[id];
+      const cv = document.getElementById(id) || (chart && chart.canvas);
+      if (!cv) { showToast('⚠️ 未找到图表画布'); return; }
+      await exportElementToPDF(cv, `${curAlgo.id}_${id}.pdf`);
+      showToast('📄 已导出出版级 PDF 图表');
+      return;
+    }
+
+    const dgSvgBtn = e.target.closest('[data-dg-svg]');
+    if (dgSvgBtn) {
+      const card = dgSvgBtn.closest('.diagram-card');
+      const svgEl = card && card.querySelector('svg');
+      if (!svgEl) return;
+      let raw = new XMLSerializer().serializeToString(svgEl);
+      if (!raw.includes('xmlns=')) raw = raw.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      const fullSvg = `<?xml version="1.0" encoding="UTF-8"?>\n` + raw;
+      downloadBlob(new Blob([fullSvg], { type: 'image/svg+xml;charset=utf-8' }), `${dgSvgBtn.dataset.dgSvg}_diagram.svg`);
+      showToast('📐 已导出几何原理 SVG 矢量图');
+      return;
+    }
+
+    const dgPdfBtn = e.target.closest('[data-dg-pdf]');
+    if (dgPdfBtn) {
+      const card = dgPdfBtn.closest('.diagram-card');
+      const svgEl = card && card.querySelector('svg');
+      if (!svgEl) return;
+      await exportElementToPDF(svgEl, `${dgPdfBtn.dataset.dgPdf}_diagram.pdf`);
+      showToast('📄 已导出几何原理 PDF 文件');
+      return;
+    }
+
+    const tblBtn = e.target.closest('[data-tbl-act]');
+    if (tblBtn) {
+      const act = tblBtn.dataset.tblAct;
+      const wrap = tblBtn.closest('.table-wrap');
+      const tableEl = wrap && wrap.querySelector('table');
+      if (!tableEl) return;
+      const cardEl = wrap.closest('.res-card');
+      const titleEl = cardEl && cardEl.querySelector('.res-title');
+      const cap = titleEl ? titleEl.textContent.replace(/\s+/g, ' ').trim() : `${curAlgo.short || curAlgo.name} 计算结果表`;
+
+      if (act === 'copy-latex') {
+        const tex = domTableToLatex(tableEl, cap);
+        try { await navigator.clipboard.writeText(tex); } catch (_) {
+          const t = document.createElement('textarea'); t.value = tex; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
+        }
+        const orig = tblBtn.textContent;
+        tblBtn.textContent = '✓ 已复制 LaTeX';
+        setTimeout(() => (tblBtn.textContent = orig), 1600);
+        showToast('📋 已复制 LaTeX booktabs 三线表源码');
+      } else if (act === 'toggle-latex') {
+        const pre = wrap.querySelector('.latex-preview');
+        if (!pre) return;
+        if (pre.hidden) {
+          pre.textContent = domTableToLatex(tableEl, cap);
+          pre.hidden = false;
+          tblBtn.classList.add('on');
+        } else {
+          pre.hidden = true;
+          tblBtn.classList.remove('on');
+        }
+      } else if (act === 'export-csv') {
+        const csv = '\uFEFF' + domTableToCSV(tableEl);
+        downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${curAlgo.id}_table.csv`);
+        showToast('📥 已导出结果表格 CSV 文件');
+      }
+    }
+  });
+
+  window.MM_EXPORT = {
+    chartToVectorSVG,
+    exportElementToPDF,
+    domTableToLatex,
+    domTableToCSV,
+    applyCsvTextToInput,
+    getChart: id => chartMap[id],
+  };
 
   if (window.Chart) {
     Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
